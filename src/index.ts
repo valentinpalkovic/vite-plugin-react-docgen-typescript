@@ -1,6 +1,4 @@
 import { type Plugin, createFilter } from "vite";
-import * as path from "path";
-import glob from "glob-promise";
 import type { Options } from "./utils/options";
 
 const getUtils = async (config: Options) => {
@@ -20,24 +18,40 @@ const getUtils = async (config: Options) => {
 		docgenOptions;
 	const filter = createFilter(include, exclude);
 
-	const files = include
-		.map((filePath) =>
-			glob.sync(
-				path.isAbsolute(filePath)
-					? filePath
-					: path.join(process.cwd(), filePath),
-			),
-		)
-		.reduce((carry, files) => carry.concat(files), []);
+	const configFile = ts.findConfigFile(
+		process.cwd(),
+		ts.sys.fileExists,
+		config.tsconfigPath ?? "tsconfig.json",
+	);
 
-	const tsProgram = ts.createProgram(files, compilerOptions);
+	if (!configFile) {
+		throw new Error(
+			"vite-plugin-react-docgen-typescript: tsconfig.json not found in your root. Please provide the path to the tsconfig.json file via tsconfigPath option",
+		);
+	}
+	const createProgram = ts.createAbstractBuilder;
+
+	const host = ts.createWatchCompilerHost(
+		configFile,
+		{
+			...config.compilerOptions,
+			noEmit: true,
+		},
+		ts.sys,
+		createProgram,
+		// Disable standard diagnostic logging
+		() => {},
+		// Disable standard watch logging
+		() => {},
+	);
+	const tsWatchProgram = ts.createWatchProgram(host);
 
 	const result = {
 		docGenParser,
 		filter,
 		generateOptions,
 		generateDocgenCodeBlock,
-		tsProgram,
+		tsProgram: tsWatchProgram.getProgram(),
 	};
 
 	return result;
@@ -62,9 +76,8 @@ export default function reactDocgenTypescript(config: Options = {}): Plugin {
 					return;
 				}
 
-				const componentDocs = docGenParser.parseWithProgramProvider(
-					id,
-					() => tsProgram,
+				const componentDocs = docGenParser.parseWithProgramProvider(id, () =>
+					tsProgram.getProgram(),
 				);
 
 				if (!componentDocs.length) {
